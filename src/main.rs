@@ -1,4 +1,6 @@
-use std::{collections::HashMap, fmt, io};
+use std::{collections::HashMap, fmt};
+
+use rustyline::DefaultEditor;
 
 #[derive(Clone)]
 enum RispExp {
@@ -292,24 +294,23 @@ fn parse_eval(expr: String, env: &mut RispEnv) -> Result<RispExp, RispErr> {
     Ok(evaled_exp)
 }
 
-fn slurp_expr() -> String {
-    let mut expr = String::new();
-    io::stdin()
-        .read_line(&mut expr)
-        .expect("Failed to read line");
-    expr
-}
-
 fn main() {
+    let mut rl = DefaultEditor::new().unwrap();
+
     let env = &mut default_env();
     loop {
-        println!("risp >");
-        let expr = slurp_expr();
-        match parse_eval(expr, env) {
-            Ok(res) => println!("// 🔥 => {}", res),
-            Err(e) => match e {
-                RispErr(msg) => println!("// 🙀 => {}", msg),
-            },
+        let readline = rl.readline("risp>> ");
+        match readline {
+            Ok(expr) => {
+                rl.add_history_entry(&expr).unwrap();
+                match parse_eval(expr, env) {
+                    Ok(res) => println!("{}", res),
+                    Err(e) => match e {
+                        RispErr(msg) => println!("// 🙀 => {}", msg),
+                    },
+                }
+            }
+            Err(_) => break,
         }
     }
 }
