@@ -2,6 +2,7 @@ use std::{collections::HashMap, fmt, io};
 
 #[derive(Clone)]
 enum RispExp {
+    Bool(bool),
     Symbol(String),
     Number(f64),
     List(Vec<RispExp>),
@@ -54,10 +55,16 @@ fn read_seq(tokens: &[String]) -> Result<(RispExp, &[String]), RispErr> {
 }
 
 fn parse_atom(token: &str) -> RispExp {
-    let maybe_float = token.parse::<f64>();
-    match maybe_float {
-        Ok(v) => RispExp::Number(v),
-        Err(_) => RispExp::Symbol(token.to_string().clone()),
+    match token {
+        "true" => RispExp::Bool(true),
+        "false" => RispExp::Bool(false),
+        _ => {
+            let maybe_float = token.parse::<f64>();
+            match maybe_float {
+                Ok(v) => RispExp::Number(v),
+                Err(_) => RispExp::Symbol(token.to_string().clone()),
+            }
+        }
     }
 }
 
@@ -82,10 +89,30 @@ fn add(args: &[RispExp]) -> Result<RispExp, RispErr> {
 
 fn sub(args: &[RispExp]) -> Result<RispExp, RispErr> {
     let nums = parse_list_of_floats(args)?;
-    if nums.len() != 2 {
-        return Err(RispErr::Reason("`-` expects exactly 2 arguments".into()));
-    }
-    Ok(RispExp::Number(nums[0] - nums[1]))
+    let (first, rest) = nums
+        .split_first()
+        .ok_or(RispErr::Reason("`-` expects at least one argument".into()))?;
+    Ok(RispExp::Number(
+        first - rest.iter().fold(0.0, |sum, a| sum + a),
+    ))
+}
+
+macro_rules! ensure_tonicity {
+    ($check_fn:expr) => {{
+        |args: &[RispExp]| -> Result<RispExp, RispErr> {
+            let floats = parse_list_of_floats(args)?;
+            let (first, rest) = floats
+                .split_first()
+                .ok_or(RispErr::Reason("expected at least one number".into()))?;
+            fn f(prev: &f64, xs: &[f64]) -> bool {
+                match xs.first() {
+                    Some(x) => $check_fn(prev, x) && f(x, &xs[1..]),
+                    None => true,
+                }
+            }
+            Ok(RispExp::Bool(f(first, rest)))
+        }
+    }};
 }
 
 fn default_env() -> RispEnv {
@@ -93,6 +120,11 @@ fn default_env() -> RispEnv {
         data: HashMap::from([
             ("+".into(), RispExp::Func(add)),
             ("-".into(), RispExp::Func(sub)),
+            ("=".into(), RispExp::Func(ensure_tonicity!(|a, b| a == b))),
+            (">".into(), RispExp::Func(ensure_tonicity!(|a, b| a > b))),
+            (">=".into(), RispExp::Func(ensure_tonicity!(|a, b| a >= b))),
+            ("<".into(), RispExp::Func(ensure_tonicity!(|a, b| a < b))),
+            ("<=".into(), RispExp::Func(ensure_tonicity!(|a, b| a <= b))),
         ]),
     }
 }
@@ -104,7 +136,7 @@ fn eval(exp: &RispExp, env: &mut RispEnv) -> Result<RispExp, RispErr> {
             .get(k)
             .ok_or(RispErr::Reason(format!("unexpected symbol k='{}'", k)))?
             .clone()),
-        RispExp::Number(_) => Ok(exp.clone()),
+        RispExp::Number(_) | RispExp::Bool(_) => Ok(exp.clone()),
         RispExp::List(list) => {
             let (first_form, arg_forms) = list
                 .split_first()
@@ -126,6 +158,7 @@ fn eval(exp: &RispExp, env: &mut RispEnv) -> Result<RispExp, RispErr> {
 impl fmt::Display for RispExp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let str = match self {
+            RispExp::Bool(b) => b.to_string(),
             RispExp::Symbol(s) => s.clone(),
             RispExp::Number(n) => n.to_string(),
             RispExp::List(list) => {
