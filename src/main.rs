@@ -129,6 +129,53 @@ fn default_env() -> RispEnv {
     }
 }
 
+fn eval_if_args(arg_forms: &[RispExp], env: &mut RispEnv) -> Result<RispExp, RispErr> {
+    let [test_form, if_form, else_form] = arg_forms else {
+        return Err(RispErr::Reason("expected if to have exactly 3 args".into()));
+    };
+    let test_eval = eval(&arg_forms[0], env)?;
+    match test_eval {
+        RispExp::Bool(b) => {
+            let res_form = if b { if_form } else { else_form };
+            eval(res_form, env)
+        }
+        _ => Err(RispErr::Reason(format!(
+            "unexpected test form='{}'",
+            test_form
+        ))),
+    }
+}
+
+fn eval_def_args(arg_forms: &[RispExp], env: &mut RispEnv) -> Result<RispExp, RispErr> {
+    let [first_form, second_form] = arg_forms else {
+        return Err(RispErr::Reason(
+            "expected def to have exactly 2 args".into(),
+        ));
+    };
+    let name = match first_form {
+        RispExp::Symbol(s) => s,
+        _ => return Err(RispErr::Reason("expected first form to be a symbol".into())),
+    };
+    let second_eval = eval(second_form, env)?;
+    env.data.insert(name.clone(), second_eval);
+    Ok(first_form.clone())
+}
+
+fn eval_built_in_form(
+    exp: &RispExp,
+    arg_forms: &[RispExp],
+    env: &mut RispEnv,
+) -> Option<Result<RispExp, RispErr>> {
+    match exp {
+        RispExp::Symbol(s) => match s.as_str() {
+            "if" => Some(eval_if_args(arg_forms, env)),
+            "def" => Some(eval_def_args(arg_forms, env)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn eval(exp: &RispExp, env: &mut RispEnv) -> Result<RispExp, RispErr> {
     match exp {
         RispExp::Symbol(k) => Ok(env
@@ -141,14 +188,18 @@ fn eval(exp: &RispExp, env: &mut RispEnv) -> Result<RispExp, RispErr> {
             let (first_form, arg_forms) = list
                 .split_first()
                 .ok_or(RispErr::Reason("expected a non-empty list".into()))?;
-            let first_eval = eval(first_form, env)?;
-            match first_eval {
-                RispExp::Func(f) => {
-                    let args_eval: Result<Vec<RispExp>, RispErr> =
-                        arg_forms.iter().map(|x| eval(x, env)).collect();
-                    f(&args_eval?)
+            if let Some(res) = eval_built_in_form(first_form, arg_forms, env) {
+                res
+            } else {
+                let first_eval = eval(first_form, env)?;
+                match first_eval {
+                    RispExp::Func(f) => {
+                        let args_eval: Result<Vec<RispExp>, RispErr> =
+                            arg_forms.iter().map(|x| eval(x, env)).collect();
+                        f(&args_eval?)
+                    }
+                    _ => Err(RispErr::Reason("first form must be a function".into())),
                 }
-                _ => Err(RispErr::Reason("first form must be a function".into())),
             }
         }
         RispExp::Func(_) => Err(RispErr::Reason("Can't eval functions".into())),
