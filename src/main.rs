@@ -8,7 +8,7 @@ enum RispExp {
     Symbol(String),
     Number(f64),
     List(Vec<RispExp>),
-    Func(fn(&[RispExp]) -> Result<RispExp, RispErr>),
+    Func(&'static str, fn(&[RispExp]) -> Result<RispExp, RispErr>),
     Lambda(RispLambda),
 }
 
@@ -123,16 +123,21 @@ macro_rules! ensure_tonicity {
 }
 
 fn default_env<'a>() -> RispEnv<'a> {
+    type Func = fn(&[RispExp]) -> Result<RispExp, RispErr>;
+    let funcs: &[(&str, Func)] = &[
+        ("+", add),
+        ("-", sub),
+        ("=", ensure_tonicity!(|a, b| a == b)),
+        (">", ensure_tonicity!(|a, b| a > b)),
+        (">=", ensure_tonicity!(|a, b| a >= b)),
+        ("<", ensure_tonicity!(|a, b| a < b)),
+        ("<=", ensure_tonicity!(|a, b| a <= b)),
+    ];
     RispEnv {
-        data: HashMap::from([
-            ("+".into(), RispExp::Func(add)),
-            ("-".into(), RispExp::Func(sub)),
-            ("=".into(), RispExp::Func(ensure_tonicity!(|a, b| a == b))),
-            (">".into(), RispExp::Func(ensure_tonicity!(|a, b| a > b))),
-            (">=".into(), RispExp::Func(ensure_tonicity!(|a, b| a >= b))),
-            ("<".into(), RispExp::Func(ensure_tonicity!(|a, b| a < b))),
-            ("<=".into(), RispExp::Func(ensure_tonicity!(|a, b| a <= b))),
-        ]),
+        data: funcs
+            .iter()
+            .map(|(k, f)| (k.to_string(), RispExp::Func(k, *f)))
+            .collect(),
         outer: None,
     }
 }
@@ -241,9 +246,8 @@ fn env_for_lambda<'a>(
 fn eval(exp: &RispExp, env: &mut RispEnv) -> Result<RispExp, RispErr> {
     match exp {
         RispExp::Symbol(k) => Ok(env_get(k, env)
-            .ok_or(RispErr(format!("unexpected symbol k='{}'", k)))?
+            .ok_or(RispErr(format!("Couldn't find symbol `{}`", k)))?
             .clone()),
-        RispExp::Number(_) | RispExp::Bool(_) => Ok(exp.clone()),
         RispExp::List(list) => {
             let (first_form, arg_forms) = list
                 .split_first()
@@ -253,17 +257,19 @@ fn eval(exp: &RispExp, env: &mut RispEnv) -> Result<RispExp, RispErr> {
             } else {
                 let first_eval = eval(first_form, env)?;
                 match first_eval {
-                    RispExp::Func(f) => f(&eval_forms(arg_forms, env)?),
+                    RispExp::Func(_, f) => f(&eval_forms(arg_forms, env)?),
                     RispExp::Lambda(lambda) => {
                         let new_env = &mut env_for_lambda(&lambda.params, arg_forms, env)?;
                         eval(&lambda.body_exp, new_env)
                     }
-                    _ => Err(RispErr("first form must be a function".into())),
+                    _ => Err(RispErr(format!(
+                        "first form must be a function: {}",
+                        first_eval
+                    ))),
                 }
             }
         }
-        RispExp::Func(_) => Err(RispErr("Can't eval functions".into())),
-        RispExp::Lambda(_) => Err(RispErr("Can't eval Lambda".into())),
+        _ => Ok(exp.clone()),
     }
 }
 
@@ -274,11 +280,18 @@ impl fmt::Display for RispExp {
             RispExp::Symbol(s) => s.clone(),
             RispExp::Number(n) => n.to_string(),
             RispExp::List(list) => {
-                let xs: Vec<String> = list.iter().map(|x| x.to_string()).collect();
-                format!("({})", xs.join(","))
+                format!(
+                    "({})",
+                    list.iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<String>>()
+                        .join(" ")
+                )
             }
-            RispExp::Func(_) => "Function {}".to_string(),
-            RispExp::Lambda(_) => "Lambda {}".to_string(),
+            RispExp::Func(name, _) => name.to_string(),
+            RispExp::Lambda(lambda) => {
+                format!("(fn ({}) {})", lambda.params.join(" "), lambda.body_exp)
+            }
         };
         write!(f, "{}", str)
     }
